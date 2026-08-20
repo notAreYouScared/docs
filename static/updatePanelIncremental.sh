@@ -1,0 +1,368 @@
+#!/bin/bash
+# Pelican Panel – Incremental Git-Based Update Script
+# Applies only the files that changed between your current version and the latest release.
+
+set -euo pipefail
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 0.  Root check
+# ─────────────────────────────────────────────────────────────────────────────
+if [[ $EUID -ne 0 ]]; then
+  echo "This script must be run as root or with sudo." >&2
+  exit 1
+fi
+
+PANEL_REPO="https://github.com/pelican-dev/panel.git"
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1.  Installation directory
+# ─────────────────────────────────────────────────────────────────────────────
+read -rp "Enter the directory for the panel location [/var/www/pelican]: " install_dir
+install_dir="${install_dir:-/var/www/pelican}"
+
+if [ ! -d "$install_dir" ]; then
+  echo "Directory $install_dir does not exist. Exiting..."
+  exit 1
+fi
+
+env_file="$install_dir/.env"
+if [ ! -f "$env_file" ]; then
+  echo "File $env_file does not exist. Exiting..."
+  exit 1
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2.  Owner / group (auto-detect with fallback)
+# ─────────────────────────────────────────────────────────────────────────────
+owner=$(stat -c '%U' "$install_dir" 2>/dev/null || echo "www-data")
+read -rp "Enter the owner of the files [$owner]: " owner_input
+owner="${owner_input:-$owner}"
+
+group=$(stat -c '%G' "$install_dir" 2>/dev/null || echo "www-data")
+read -rp "Enter the group of the files [$group]: " group_input
+group="${group_input:-$group}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3.  Detect current version
+# ─────────────────────────────────────────────────────────────────────────────
+current_version=""
+
+if [ -f "$install_dir/VERSION" ]; then
+  current_version=$(cat "$install_dir/VERSION" | tr -d '[:space:]')
+fi
+
+# Fallback: read from .env APP_VERSION
+if [ -z "$current_version" ] && grep -q "^APP_VERSION=" "$env_file"; then
+  current_version=$(grep "^APP_VERSION=" "$env_file" | cut -d '=' -f2 | tr -d "\"' ")
+fi
+
+if [ -z "$current_version" ]; then
+  read -rp "Could not detect current version. Enter it manually (e.g. v1.0.0): " current_version
+fi
+
+# Normalise: ensure leading 'v'
+[[ "$current_version" != v* ]] && current_version="v${current_version}"
+echo "Current installed version: $current_version"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4.  Clone / update a local mirror of the panel repo
+# ─────────────────────────────────────────────────────────────────────────────
+tmp_repo="/tmp/pelican_panel_repo_${TIMESTAMP}"
+echo ""
+echo "Cloning Pelican Panel repository to $tmp_repo (this may take a moment)..."
+git clone --bare "$PANEL_REPO" "$tmp_repo" --quiet
+cd "$tmp_repo"
+
+# Fetch all tags
+git fetch --tags --quiet
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5.  Collect and sort version tags
+# ─────────────────────────────────────────────────────────────────────────────
+mapfile -t all_tags < <(git tag -l 'v*' | sort -V)
+
+if [ ${#all_tags[@]} -eq 0 ]; then
+  echo "No version tags found in the repository. Exiting..."
+  rm -rf "$tmp_repo"
+  exit 1
+fi
+
+latest_version="${all_tags[-1]}"
+echo "Latest available version: $latest_version"
+
+if [ "$current_version" = "$latest_version" ]; then
+  echo "Panel is already up to date ($current_version). Nothing to do."
+  rm -rf "$tmp_repo"
+  exit 0
+fi
+
+# Build the ordered list of versions strictly newer than current
+upgrade_path=()
+found_current=false
+for tag in "${all_tags[@]}"; do
+  if [ "$tag" = "$current_version" ]; then
+    found_current=true
+    continue
+  fi
+  if $found_current; then
+    upgrade_path+=("$tag")
+  fi
+done
+
+if [ ${#upgrade_path[@]} -eq 0 ] && ! $found_current; then
+  echo "WARNING: Current version tag '$current_version' not found in repository."
+  echo "Cannot determine safe upgrade path. Exiting."
+  rm -rf "$tmp_repo"
+  exit 1
+fi
+
+echo ""
+echo "Upgrade path:"
+prev="$current_version"
+for v in "${upgrade_path[@]}"; do
+  echo "  $prev → $v"
+  prev="$v"
+done
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6.  DB connection check
+# ─────────────────────────────────────────────────────────────────────────────
+db_connection=$(grep "^DB_CONNECTION=" "$env_file" | cut -d '=' -f2 | tr -d "\"'" || echo "sqlite")
+db_connection="${db_connection:-sqlite}"
+echo ""
+echo "DB_CONNECTION: $db_connection"
+
+db_database=""
+if [ "$db_connection" = "sqlite" ]; then
+  db_database=$(grep "^DB_DATABASE=" "$env_file" | cut -d '=' -f2 | tr -d "\"'" || echo "database.sqlite")
+  db_database="${db_database:-database.sqlite}"
+  [[ "$db_database" != *.sqlite ]] && db_database="${db_database}.sqlite"
+  echo "SQLite database: $db_database"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7.  Backup
+# ─────────────────────────────────────────────────────────────────────────────
+read -rp "Do you want to create a backup before updating? (y/n) [y]: " backup_confirm
+backup_confirm="${backup_confirm:-y}"
+if [ "$backup_confirm" != "y" ]; then
+  echo "Backup canceled. Aborting."
+  rm -rf "$tmp_repo"
+  exit 1
+fi
+
+backup_dir="$install_dir/backup_${TIMESTAMP}"
+mkdir -p "$backup_dir/storage/app"
+echo "Backup directory: $backup_dir"
+
+cp -a "$env_file" "$backup_dir/.env.backup"
+echo "  ✓ Backed up .env"
+
+if [ -d "$install_dir/storage/app/public" ]; then
+  cp -a "$install_dir/storage/app/public" "$backup_dir/storage/app/"
+  echo "  ✓ Backed up storage/app/public"
+fi
+
+if [ "$db_connection" = "sqlite" ] && [ -f "$install_dir/database/$db_database" ]; then
+  cp -a "$install_dir/database/$db_database" "$backup_dir/${db_database}.backup"
+  echo "  ✓ Backed up SQLite database"
+elif [ "$db_connection" != "sqlite" ]; then
+  echo ""
+  echo "WARNING: MySQL/MariaDB databases are NOT backed up by this script."
+  read -rp "Pause now and make your own DB backup, then continue? (y/n) [y]: " db_warn
+  db_warn="${db_warn:-y}"
+  if [ "$db_warn" != "y" ]; then
+    echo "Update canceled."
+    rm -rf "$tmp_repo"
+    exit 1
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8.  Paths that are never overwritten
+# ─────────────────────────────────────────────────────────────────────────────
+PROTECTED_PATHS=(
+  ".env"
+  "storage/app/public"
+  "database/database.sqlite"
+)
+
+is_protected() {
+  local file="$1"
+  for protected in "${PROTECTED_PATHS[@]}"; do
+    if [[ "$file" == "$protected" || "$file" == "$protected/"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.  Apply each version hop
+# ─────────────────────────────────────────────────────────────────────────────
+needs_composer=false
+needs_migrations=false
+any_changes=false
+
+prev_tag="$current_version"
+
+for next_tag in "${upgrade_path[@]}"; do
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo " Applying changes: $prev_tag → $next_tag"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+  # Collect changed, added, deleted files between the two tags
+  mapfile -t changed_files < <(git diff --name-status "${prev_tag}..${next_tag}" 2>/dev/null | awk '{print $1, $2}')
+
+  if [ ${#changed_files[@]} -eq 0 ]; then
+    echo "  No file changes detected between $prev_tag and $next_tag."
+    prev_tag="$next_tag"
+    continue
+  fi
+
+  any_changes=true
+  added=0; modified=0; deleted=0; skipped=0
+
+  for entry in "${changed_files[@]}"; do
+    status="${entry%% *}"
+    file="${entry#* }"
+
+    # Skip protected paths
+    if is_protected "$file"; then
+      echo "  [SKIP ]  $file  (protected)"
+      ((skipped++)) || true
+      continue
+    fi
+
+    case "$status" in
+      A|M|C*|R*)
+        # Added, Modified, Copied, Renamed → extract from next_tag and write
+        dest="$install_dir/$file"
+        dest_dir=$(dirname "$dest")
+        mkdir -p "$dest_dir"
+
+        git show "${next_tag}:${file}" > "$dest" 2>/dev/null && {
+          if [ "$status" = "A" ]; then
+            echo "  [ADD  ]  $file"
+            ((added++)) || true
+          else
+            echo "  [MOD  ]  $file"
+            ((modified++)) || true
+          fi
+        } || {
+          echo "  [WARN ]  Could not extract $file from $next_tag – skipping"
+          ((skipped++)) || true
+        }
+
+        # Flag post-update steps if relevant files changed
+        [[ "$file" == composer.json || "$file" == composer.lock ]] && needs_composer=true
+        [[ "$file" == database/migrations/* ]] && needs_migrations=true
+        ;;
+
+      D)
+        # Deleted
+        if [ -f "$install_dir/$file" ]; then
+          rm -f "$install_dir/$file"
+          echo "  [DEL  ]  $file"
+          ((deleted++)) || true
+        fi
+        ;;
+
+      *)
+        echo "  [SKIP ]  $file  (unhandled status: $status)"
+        ((skipped++)) || true
+        ;;
+    esac
+  done
+
+  echo ""
+  echo "  Summary for $prev_tag → $next_tag:"
+  echo "    Added:    $added"
+  echo "    Modified: $modified"
+  echo "    Deleted:  $deleted"
+  echo "    Skipped:  $skipped"
+
+  prev_tag="$next_tag"
+done
+
+# Cleanup temp repo
+rm -rf "$tmp_repo"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10.  Post-update steps
+# ─────────────────────────────────────────────────────────────────────────────
+if ! $any_changes; then
+  echo ""
+  echo "No file changes were applied. Panel may already be at $latest_version."
+  exit 0
+fi
+
+cd "$install_dir"
+
+if $needs_composer || [ ! -d "$install_dir/vendor" ]; then
+  echo ""
+  echo "Running Composer..."
+  COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction
+fi
+
+echo ""
+echo "Clearing & optimizing cache..."
+php artisan optimize:clear
+php artisan filament:optimize
+
+echo ""
+echo "Ensuring storage symlinks..."
+php artisan storage:link
+
+if $needs_migrations; then
+  echo ""
+  echo "Running database migrations..."
+  php artisan migrate --seed --force
+else
+  # Always run migrations to be safe; migrations are idempotent
+  echo ""
+  echo "Running database migrations (idempotent)..."
+  php artisan migrate --force
+fi
+
+echo ""
+echo "Restarting queue workers..."
+php artisan queue:restart
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 11.  Permissions
+# ─────────────────────────────────────────────────────────────────────────────
+echo ""
+echo "Setting permissions..."
+
+chmod_cmd="chmod -R 755 \"$install_dir\"/storage/* \"$install_dir\"/bootstrap/cache"
+chown_cmd="chown -R $owner:$group \"$install_dir\""
+
+eval "$chmod_cmd" || echo "WARNING: chmod failed – run manually: sudo $chmod_cmd"
+eval "$chown_cmd" || echo "WARNING: chown failed – run manually: sudo $chown_cmd"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 12.  Update VERSION file
+# ─────────────────────────────────────────────────────────────────────────────
+echo "$latest_version" > "$install_dir/VERSION"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 13.  Done
+# ─────────────────────────────────────────────────────────────────────────────
+echo ""
+echo "══════════════════════════════════════════════════"
+echo " Panel updated: $current_version → $latest_version"
+echo "══════════════════════════════════════════════════"
+echo ""
+echo "Backup saved to: $backup_dir"
+echo ""
+echo "If you had custom themes installed, rebuild assets manually:"
+echo "  cd $install_dir && yarn install && yarn build"
+echo ""
+echo "To verify permissions:"
+echo "  sudo $chmod_cmd"
+echo "  sudo $chown_cmd"
+
+exit 0
