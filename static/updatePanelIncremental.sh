@@ -293,8 +293,8 @@ for next_tag in "${upgrade_path[@]}"; do
   # Collect changed, added, deleted files between the two tags.
   # For renames (R*) git outputs: STATUS  OLD_PATH  NEW_PATH
   # We emit: STATUS OLD_PATH NEW_PATH  (space-separated, new path may be empty for non-renames)
-  diff_output=$(git diff --name-status "${prev_tag}..${next_tag}" 2>&1) || {
-    echo "  [ERROR]  git diff failed for ${prev_tag}..${next_tag}: $diff_output"
+  diff_output=$(git diff --name-status "${prev_tag}..${next_tag}") || {
+    echo "  [ERROR]  git diff failed for ${prev_tag}..${next_tag}"
     prev_tag="$next_tag"
     continue
   }
