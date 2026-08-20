@@ -294,6 +294,7 @@ for next_tag in "${upgrade_path[@]}"; do
   # Output format: STATUS\tOLD_PATH[\tNEW_PATH]
   # For renames/copies (R*/C*) three fields are present; all others have two.
   added=0; modified=0; deleted=0; renamed=0; skipped=0; diff_lines=0
+  diff_exit=0
 
   while IFS=$'\t' read -r status old_path new_path; do
     ((diff_lines++)) || true
@@ -331,6 +332,8 @@ for next_tag in "${upgrade_path[@]}"; do
         # Renamed -> remove old path, write new path
         if ! is_protected "$old_path" && [ -f "$install_dir/$old_path" ]; then
           rm -f "$install_dir/$old_path"
+          echo "  [DEL  ]  $old_path  (renamed)"
+          ((deleted++)) || true
         fi
         if is_protected "$file"; then
           echo "  [SKIP ]  $file  (protected)"
@@ -369,7 +372,15 @@ for next_tag in "${upgrade_path[@]}"; do
         ((skipped++)) || true
         ;;
     esac
-  done < <(git diff --name-status "${prev_tag}" "${next_tag}")
+  done < <(git diff --name-status "${prev_tag}" "${next_tag}"; echo "$?" > "/tmp/.pelican_diff_exit_${TIMESTAMP}_${next_tag//\//_}")
+  diff_exit=$(cat "/tmp/.pelican_diff_exit_${TIMESTAMP}_${next_tag//\//_}" 2>/dev/null || echo 0)
+  rm -f "/tmp/.pelican_diff_exit_${TIMESTAMP}_${next_tag//\//_}"
+
+  if [ "$diff_exit" -ne 0 ]; then
+    echo "  [ERROR]  git diff failed (exit $diff_exit) for ${prev_tag}..${next_tag}"
+    prev_tag="$next_tag"
+    continue
+  fi
 
   if [ "$diff_lines" -eq 0 ]; then
     echo "  No file changes detected between $prev_tag and $next_tag."
