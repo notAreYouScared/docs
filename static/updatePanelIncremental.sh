@@ -12,7 +12,7 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-PANEL_REPO="https://github.com/pelican-dev/panel.git"
+PANEL_REPO="https://github.com/pelican/panel.git"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
 # ─────────────────────────────────────────────────────────────────────────────
