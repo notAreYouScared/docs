@@ -195,7 +195,7 @@ echo ""
 echo "Upgrade path:"
 prev="$current_version"
 for v in "${upgrade_path[@]}"; do
-  echo "  $prev → $v"
+  echo "  $prev -> $v"
   prev="$v"
 done
 
@@ -287,7 +287,7 @@ prev_tag="$current_version"
 for next_tag in "${upgrade_path[@]}"; do
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo " Applying changes: $prev_tag → $next_tag"
+  echo " Applying changes: $prev_tag -> $next_tag"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
   # Collect changed, added, deleted files between the two tags.
@@ -321,7 +321,7 @@ for next_tag in "${upgrade_path[@]}"; do
 
     case "$status" in
       A|M|C*)
-        # Added, Modified, Copied → extract from next_tag and write
+        # Added, Modified, Copied -> extract from next_tag and write
         dest="$install_dir/$file"
         dest_dir=$(dirname "$dest")
         mkdir -p "$dest_dir"
@@ -345,7 +345,7 @@ for next_tag in "${upgrade_path[@]}"; do
         ;;
 
       R*)
-        # Renamed → remove old path, write new path
+        # Renamed -> remove old path, write new path
         if ! is_protected "$old_file" && [ -f "$install_dir/$old_file" ]; then
           rm -f "$install_dir/$old_file"
           echo "  [DEL  ]  $old_file  (renamed)"
@@ -385,7 +385,7 @@ for next_tag in "${upgrade_path[@]}"; do
   done
 
   echo ""
-  echo "  Summary for $prev_tag → $next_tag:"
+  echo "  Summary for $prev_tag -> $next_tag:"
   echo "    Added:    $added"
   echo "    Modified: $modified"
   echo "    Deleted:  $deleted"
@@ -459,7 +459,7 @@ chown -R "$owner:$group" "$install_dir" \
 # ─────────────────────────────────────────────────────────────────────────────
 echo ""
 echo "══════════════════════════════════════════════════"
-echo " Panel updated: $current_version → $latest_version"
+echo " Panel updated: $current_version -> $latest_version"
 echo "══════════════════════════════════════════════════"
 echo ""
 echo "Backup saved to: $backup_dir"
