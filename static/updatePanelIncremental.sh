@@ -299,18 +299,20 @@ for next_tag in "${upgrade_path[@]}"; do
   #   1. Read exit code reliably (process-substitution swallows it).
   #   2. Read the file cleanly without subshell/pipefail edge-cases.
   diff_file=$(mktemp)
+  diff_err_file=$(mktemp)
   diff_exit=0
-  git diff --name-status "${prev_tag}" "${next_tag}" > "$diff_file" 2>&1 || diff_exit=$?
+  git diff --name-status "${prev_tag}" "${next_tag}" > "$diff_file" 2>"$diff_err_file" || diff_exit=$?
 
   added=0; modified=0; deleted=0; renamed=0; skipped=0; diff_lines=0
 
   if [ "$diff_exit" -ne 0 ]; then
     echo "  [ERROR]  git diff failed (exit $diff_exit) for ${prev_tag}..${next_tag}:"
-    cat "$diff_file"
-    rm -f "$diff_file"
+    cat "$diff_err_file"
+    rm -f "$diff_file" "$diff_err_file"
     prev_tag="$next_tag"
     continue
   fi
+  rm -f "$diff_err_file"
 
   while IFS=$'\t' read -r status old_path new_path; do
     ((diff_lines++)) || true
