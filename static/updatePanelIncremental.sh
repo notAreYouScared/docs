@@ -50,9 +50,12 @@ upload_log() {
   if [ "$http_code" = "200" ]; then
     # Parse the url field from JSON response
     local paste_url
-    paste_url=$(echo "$body" | sed -n 's/.*"url"\s*:\s*"\([^"]*\)".*/\1/p' || true)
+    paste_url=$(echo "$body" | sed -n 's/.*"url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)
     if [ -n "$paste_url" ]; then
-      echo "Log uploaded: $paste_url"
+      echo ""
+      echo "  ✓ Log uploaded successfully."
+      echo "  URL: $paste_url"
+      echo ""
     else
       echo "Uploaded but could not parse URL from response: $body"
     fi
