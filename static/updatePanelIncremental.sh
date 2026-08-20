@@ -110,9 +110,13 @@ for tag in "${all_tags[@]}"; do
   fi
 done
 
-if [ ${#upgrade_path[@]} -eq 0 ] && ! $found_current; then
-  echo "WARNING: Current version tag '$current_version' not found in repository."
-  echo "Cannot determine safe upgrade path. Exiting."
+if [ ${#upgrade_path[@]} -eq 0 ]; then
+  if ! $found_current; then
+    echo "WARNING: Current version tag '$current_version' not found in repository."
+    echo "Cannot determine safe upgrade path. Exiting."
+  else
+    echo "Panel is already at the latest known tag ($current_version). Nothing to do."
+  fi
   rm -rf "$tmp_repo"
   exit 1
 fi
@@ -146,7 +150,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 read -rp "Do you want to create a backup before updating? (y/n) [y]: " backup_confirm
 backup_confirm="${backup_confirm:-y}"
-if [ "$backup_confirm" != "y" ]; then
+if [[ "${backup_confirm,,}" != "y" ]]; then
   echo "Backup canceled. Aborting."
   rm -rf "$tmp_repo"
   exit 1
@@ -172,7 +176,7 @@ elif [ "$db_connection" != "sqlite" ]; then
   echo "WARNING: MySQL/MariaDB databases are NOT backed up by this script."
   read -rp "Pause now and make your own DB backup, then continue? (y/n) [y]: " db_warn
   db_warn="${db_warn:-y}"
-  if [ "$db_warn" != "y" ]; then
+  if [[ "${db_warn,,}" != "y" ]]; then
     echo "Update canceled."
     rm -rf "$tmp_repo"
     exit 1
@@ -185,8 +189,11 @@ fi
 PROTECTED_PATHS=(
   ".env"
   "storage/app/public"
-  "database/database.sqlite"
 )
+# Add the dynamic SQLite path if applicable
+if [ "$db_connection" = "sqlite" ] && [ -n "$db_database" ]; then
+  PROTECTED_PATHS+=("database/$db_database")
+fi
 
 is_protected() {
   local file="$1"
@@ -213,8 +220,10 @@ for next_tag in "${upgrade_path[@]}"; do
   echo " Applying changes: $prev_tag → $next_tag"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-  # Collect changed, added, deleted files between the two tags
-  mapfile -t changed_files < <(git diff --name-status "${prev_tag}..${next_tag}" 2>/dev/null | awk '{print $1, $2}')
+  # Collect changed, added, deleted files between the two tags.
+  # For renames (R*) git outputs: STATUS  OLD_PATH  NEW_PATH
+  # We emit: STATUS OLD_PATH NEW_PATH  (space-separated, new path may be empty for non-renames)
+  mapfile -t changed_files < <(git diff --name-status "${prev_tag}..${next_tag}" 2>/dev/null | awk '{print $1, $2, ($3 != "" ? $3 : $2)}')
 
   if [ ${#changed_files[@]} -eq 0 ]; then
     echo "  No file changes detected between $prev_tag and $next_tag."
@@ -227,7 +236,11 @@ for next_tag in "${upgrade_path[@]}"; do
 
   for entry in "${changed_files[@]}"; do
     status="${entry%% *}"
-    file="${entry#* }"
+    rest="${entry#* }"
+    old_file="${rest%% *}"
+    new_file="${rest##* }"
+    # For non-rename entries, old_file == new_file
+    file="$new_file"
 
     # Skip protected paths
     if is_protected "$file"; then
@@ -237,8 +250,8 @@ for next_tag in "${upgrade_path[@]}"; do
     fi
 
     case "$status" in
-      A|M|C*|R*)
-        # Added, Modified, Copied, Renamed → extract from next_tag and write
+      A|M|C*)
+        # Added, Modified, Copied → extract from next_tag and write
         dest="$install_dir/$file"
         dest_dir=$(dirname "$dest")
         mkdir -p "$dest_dir"
@@ -257,6 +270,30 @@ for next_tag in "${upgrade_path[@]}"; do
         }
 
         # Flag post-update steps if relevant files changed
+        [[ "$file" == composer.json || "$file" == composer.lock ]] && needs_composer=true
+        [[ "$file" == database/migrations/* ]] && needs_migrations=true
+        ;;
+
+      R*)
+        # Renamed → remove old path, write new path
+        if ! is_protected "$old_file" && [ -f "$install_dir/$old_file" ]; then
+          rm -f "$install_dir/$old_file"
+          echo "  [DEL  ]  $old_file  (renamed)"
+          ((deleted++)) || true
+        fi
+
+        dest="$install_dir/$file"
+        dest_dir=$(dirname "$dest")
+        mkdir -p "$dest_dir"
+
+        git show "${next_tag}:${file}" > "$dest" 2>/dev/null && {
+          echo "  [ADD  ]  $file  (renamed from $old_file)"
+          ((added++)) || true
+        } || {
+          echo "  [WARN ]  Could not extract $file from $next_tag – skipping"
+          ((skipped++)) || true
+        }
+
         [[ "$file" == composer.json || "$file" == composer.lock ]] && needs_composer=true
         [[ "$file" == database/migrations/* ]] && needs_migrations=true
         ;;
@@ -340,8 +377,10 @@ echo "Setting permissions..."
 chmod_cmd="chmod -R 755 \"$install_dir\"/storage/* \"$install_dir\"/bootstrap/cache"
 chown_cmd="chown -R $owner:$group \"$install_dir\""
 
-eval "$chmod_cmd" || echo "WARNING: chmod failed – run manually: sudo $chmod_cmd"
-eval "$chown_cmd" || echo "WARNING: chown failed – run manually: sudo $chown_cmd"
+chmod -R 755 "$install_dir"/storage/* "$install_dir"/bootstrap/cache \
+  || echo "WARNING: chmod failed – run manually: sudo $chmod_cmd"
+chown -R "$owner:$group" "$install_dir" \
+  || echo "WARNING: chown failed – run manually: sudo $chown_cmd"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 12.  Update VERSION file
