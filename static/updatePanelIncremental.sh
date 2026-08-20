@@ -290,48 +290,28 @@ for next_tag in "${upgrade_path[@]}"; do
   echo " Applying changes: $prev_tag -> $next_tag"
   echo "-----------------------------------------"
 
-  # Collect changed, added, deleted files between the two tags.
-  # For renames (R*) git outputs: STATUS  OLD_PATH  NEW_PATH
-  # We emit: STATUS OLD_PATH NEW_PATH  (space-separated, new path may be empty for non-renames)
-  diff_output=$(git diff --name-status "${prev_tag}..${next_tag}") || {
-    echo "  [ERROR]  git diff failed for ${prev_tag}..${next_tag}"
-    prev_tag="$next_tag"
-    continue
-  }
-  mapfile -t changed_files < <(echo "$diff_output" | awk '{print $1, $2, ($3 != "" ? $3 : $2)}')
+  # Parse git diff --name-status directly via tab-delimited read.
+  # Output format: STATUS\tOLD_PATH[\tNEW_PATH]
+  # For renames/copies (R*/C*) three fields are present; all others have two.
+  added=0; modified=0; deleted=0; renamed=0; skipped=0; diff_lines=0
 
-  if [ ${#changed_files[@]} -eq 0 ]; then
-    echo "  No file changes detected between $prev_tag and $next_tag."
-    prev_tag="$next_tag"
-    continue
-  fi
+  while IFS=$'\t' read -r status old_path new_path; do
+    ((diff_lines++)) || true
 
-  any_changes=true
-  added=0; modified=0; deleted=0; skipped=0
-
-  for entry in "${changed_files[@]}"; do
-    status="${entry%% *}"
-    rest="${entry#* }"
-    old_file="${rest%% *}"
-    new_file="${rest##* }"
-    # For non-rename entries, old_file == new_file
-    file="$new_file"
-
-    # Skip protected paths
-    if is_protected "$file"; then
-      echo "  [SKIP ]  $file  (protected)"
-      ((skipped++)) || true
-      continue
-    fi
+    # For non-rename/copy entries new_path is empty; the target file is old_path
+    file="${new_path:-$old_path}"
 
     case "$status" in
       A|M|C*)
         # Added, Modified, Copied -> extract from next_tag and write
+        if is_protected "$file"; then
+          echo "  [SKIP ]  $file  (protected)"
+          ((skipped++)) || true
+          continue
+        fi
         dest="$install_dir/$file"
-        dest_dir=$(dirname "$dest")
-        mkdir -p "$dest_dir"
-
-        git show "${next_tag}:${file}" > "$dest" 2>/dev/null && {
+        mkdir -p "$(dirname "$dest")"
+        if git show "${next_tag}:${file}" > "$dest" 2>/dev/null; then
           if [ "$status" = "A" ]; then
             echo "  [ADD  ]  $file"
             ((added++)) || true
@@ -339,42 +319,44 @@ for next_tag in "${upgrade_path[@]}"; do
             echo "  [MOD  ]  $file"
             ((modified++)) || true
           fi
-        } || {
-          echo "  [WARN ]  Could not extract $file from $next_tag – skipping"
+          [[ "$file" == composer.json || "$file" == composer.lock ]] && needs_composer=true
+          [[ "$file" == database/migrations/* ]] && needs_migrations=true
+        else
+          echo "  [WARN ]  Could not extract $file from $next_tag"
           ((skipped++)) || true
-        }
-
-        # Flag post-update steps if relevant files changed
-        [[ "$file" == composer.json || "$file" == composer.lock ]] && needs_composer=true
-        [[ "$file" == database/migrations/* ]] && needs_migrations=true
+        fi
         ;;
 
       R*)
         # Renamed -> remove old path, write new path
-        if ! is_protected "$old_file" && [ -f "$install_dir/$old_file" ]; then
-          rm -f "$install_dir/$old_file"
-          echo "  [DEL  ]  $old_file  (renamed)"
-          ((deleted++)) || true
+        if ! is_protected "$old_path" && [ -f "$install_dir/$old_path" ]; then
+          rm -f "$install_dir/$old_path"
         fi
-
-        dest="$install_dir/$file"
-        dest_dir=$(dirname "$dest")
-        mkdir -p "$dest_dir"
-
-        git show "${next_tag}:${file}" > "$dest" 2>/dev/null && {
-          echo "  [ADD  ]  $file  (renamed from $old_file)"
-          ((added++)) || true
-        } || {
-          echo "  [WARN ]  Could not extract $file from $next_tag – skipping"
+        if is_protected "$file"; then
+          echo "  [SKIP ]  $file  (protected)"
           ((skipped++)) || true
-        }
-
-        [[ "$file" == composer.json || "$file" == composer.lock ]] && needs_composer=true
-        [[ "$file" == database/migrations/* ]] && needs_migrations=true
+          continue
+        fi
+        dest="$install_dir/$file"
+        mkdir -p "$(dirname "$dest")"
+        if git show "${next_tag}:${file}" > "$dest" 2>/dev/null; then
+          echo "  [ADD  ]  $file  (renamed from $old_path)"
+          ((renamed++)) || true
+          [[ "$file" == composer.json || "$file" == composer.lock ]] && needs_composer=true
+          [[ "$file" == database/migrations/* ]] && needs_migrations=true
+        else
+          echo "  [WARN ]  Could not extract $file from $next_tag"
+          ((skipped++)) || true
+        fi
         ;;
 
       D)
         # Deleted
+        if is_protected "$file"; then
+          echo "  [SKIP ]  $file  (protected)"
+          ((skipped++)) || true
+          continue
+        fi
         if [ -f "$install_dir/$file" ]; then
           rm -f "$install_dir/$file"
           echo "  [DEL  ]  $file"
@@ -387,14 +369,20 @@ for next_tag in "${upgrade_path[@]}"; do
         ((skipped++)) || true
         ;;
     esac
-  done
+  done < <(git diff --name-status "${prev_tag}" "${next_tag}")
 
-  echo ""
-  echo "  Summary for $prev_tag -> $next_tag:"
-  echo "    Added:    $added"
-  echo "    Modified: $modified"
-  echo "    Deleted:  $deleted"
-  echo "    Skipped:  $skipped"
+  if [ "$diff_lines" -eq 0 ]; then
+    echo "  No file changes detected between $prev_tag and $next_tag."
+  else
+    any_changes=true
+    echo ""
+    echo "  Summary for $prev_tag -> $next_tag:"
+    echo "    Added:    $added"
+    echo "    Modified: $modified"
+    echo "    Deleted:  $deleted"
+    echo "    Renamed:  $renamed"
+    echo "    Skipped:  $skipped"
+  fi
 
   prev_tag="$next_tag"
 done
