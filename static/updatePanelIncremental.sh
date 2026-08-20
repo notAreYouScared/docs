@@ -5,7 +5,15 @@
 set -euo pipefail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 0.  Root check
+# 0a.  Dependency check – git must be available
+# ─────────────────────────────────────────────────────────────────────────────
+if ! command -v git &>/dev/null; then
+  echo "git is not installed or not in PATH. Please install git and re-run this script." >&2
+  exit 1
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 0b.  Root check
 # ─────────────────────────────────────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
   echo "This script must be run as root or with sudo." >&2
@@ -14,6 +22,65 @@ fi
 
 PANEL_REPO="https://github.com/pelican/panel.git"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 0c.  Log file – tee all output so we can upload it later
+# ─────────────────────────────────────────────────────────────────────────────
+LOG_FILE="/tmp/pelican_update_${TIMESTAMP}.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "Update log: $LOG_FILE"
+
+# Upload log to logs.pelican.dev and print the URL.
+upload_log() {
+  if ! command -v curl &>/dev/null; then
+    echo "curl not found – cannot upload log." >&2
+    return 1
+  fi
+  local content
+  content=$(cat "$LOG_FILE")
+  local response
+  response=$(curl -s -w "\n%{http_code}" \
+    -F "c=$content" \
+    -F "e=14d" \
+    "https://logs.pelican.dev")
+  local http_code
+  http_code=$(echo "$response" | tail -n1)
+  local body
+  body=$(echo "$response" | sed '$d')
+  if [ "$http_code" = "200" ]; then
+    # Parse the url field from JSON response
+    local paste_url
+    paste_url=$(echo "$body" | grep -oP '"url"\s*:\s*"\K[^"]+' || true)
+    if [ -n "$paste_url" ]; then
+      echo "Log uploaded: $paste_url"
+    else
+      echo "Uploaded but could not parse URL from response: $body"
+    fi
+  else
+    echo "Upload failed (HTTP $http_code): $body" >&2
+    return 1
+  fi
+}
+
+# Offer to upload the log – called on success and on error traps.
+offer_log_upload() {
+  echo ""
+  echo "Log saved to: $LOG_FILE"
+  read -rp "Upload log to logs.pelican.dev to share with the Pelican team? (y/n) [n]: " upload_confirm </dev/tty || true
+  upload_confirm="${upload_confirm:-n}"
+  if [[ "${upload_confirm,,}" == "y" ]]; then
+    upload_log
+  fi
+}
+
+# Trap unexpected exits so we always offer the upload on failure.
+_error_handler() {
+  local exit_code=$?
+  echo ""
+  echo "Script exited unexpectedly (exit code $exit_code)."
+  offer_log_upload
+}
+trap '_error_handler' ERR
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1.  Installation directory
@@ -90,6 +157,8 @@ echo "Latest available version: $latest_version"
 if [ "$current_version" = "$latest_version" ]; then
   echo "Panel is already up to date ($current_version). Nothing to do."
   rm -rf "$tmp_repo"
+  trap - ERR
+  offer_log_upload
   exit 0
 fi
 
@@ -329,6 +398,8 @@ rm -rf "$tmp_repo"
 if ! $any_changes; then
   echo ""
   echo "No file changes were applied. Panel may already be at $latest_version."
+  trap - ERR
+  offer_log_upload
   exit 0
 fi
 
@@ -394,5 +465,9 @@ echo ""
 echo "To verify permissions:"
 echo "  sudo $chmod_cmd"
 echo "  sudo $chown_cmd"
+
+# Disable the ERR trap so a clean exit doesn't trigger the error handler.
+trap - ERR
+offer_log_upload
 
 exit 0
