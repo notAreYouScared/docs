@@ -50,7 +50,7 @@ upload_log() {
   if [ "$http_code" = "200" ]; then
     # Parse the url field from JSON response
     local paste_url
-    paste_url=$(echo "$body" | grep -oP '"url"\s*:\s*"\K[^"]+' || true)
+    paste_url=$(echo "$body" | sed -n 's/.*"url"\s*:\s*"\([^"]*\)".*/\1/p' || true)
     if [ -n "$paste_url" ]; then
       echo "Log uploaded: $paste_url"
     else
@@ -66,6 +66,7 @@ upload_log() {
 offer_log_upload() {
   echo ""
   echo "Log saved to: $LOG_FILE"
+  echo "Note: the log contains command output, file paths, and version information from this run."
   read -rp "Upload log to logs.pelican.dev to share with the Pelican team? (y/n) [n]: " upload_confirm </dev/tty || true
   upload_confirm="${upload_confirm:-n}"
   if [[ "${upload_confirm,,}" == "y" ]]; then
@@ -79,6 +80,7 @@ _error_handler() {
   echo ""
   echo "Script exited unexpectedly (exit code $exit_code)."
   offer_log_upload
+  exit "$exit_code"
 }
 trap '_error_handler' ERR
 
