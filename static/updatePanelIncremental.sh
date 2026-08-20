@@ -140,7 +140,11 @@ tmp_repo="/tmp/pelican_panel_repo_${TIMESTAMP}"
 echo ""
 echo "Cloning Pelican Panel repository to $tmp_repo (this may take a moment)..."
 git clone --bare "$PANEL_REPO" "$tmp_repo" --quiet
-cd "$tmp_repo"
+
+# Point git at the bare repo without cd-ing into it.
+# Some git versions (safe.bareRepository=explicit) refuse diff/show when the
+# bare repo is merely the CWD; setting GIT_DIR explicitly is always accepted.
+export GIT_DIR="$tmp_repo"
 
 # Fetch all tags
 git fetch --tags --quiet
@@ -259,6 +263,7 @@ fi
 PROTECTED_PATHS=(
   ".env"
   "storage/app/public"
+  ".github"
 )
 # Add the dynamic SQLite path if applicable
 if [ "$db_connection" = "sqlite" ] && [ -n "$db_database" ]; then
@@ -290,11 +295,22 @@ for next_tag in "${upgrade_path[@]}"; do
   echo " Applying changes: $prev_tag -> $next_tag"
   echo "-----------------------------------------"
 
-  # Parse git diff --name-status directly via tab-delimited read.
-  # Output format: STATUS\tOLD_PATH[\tNEW_PATH]
-  # For renames/copies (R*/C*) three fields are present; all others have two.
-  added=0; modified=0; deleted=0; renamed=0; skipped=0; diff_lines=0
+  # Capture diff output to a temp file so we can:
+  #   1. Read exit code reliably (process-substitution swallows it).
+  #   2. Read the file cleanly without subshell/pipefail edge-cases.
+  diff_file=$(mktemp)
   diff_exit=0
+  git diff --name-status "${prev_tag}" "${next_tag}" > "$diff_file" 2>&1 || diff_exit=$?
+
+  added=0; modified=0; deleted=0; renamed=0; skipped=0; diff_lines=0
+
+  if [ "$diff_exit" -ne 0 ]; then
+    echo "  [ERROR]  git diff failed (exit $diff_exit) for ${prev_tag}..${next_tag}:"
+    cat "$diff_file"
+    rm -f "$diff_file"
+    prev_tag="$next_tag"
+    continue
+  fi
 
   while IFS=$'\t' read -r status old_path new_path; do
     ((diff_lines++)) || true
@@ -372,15 +388,8 @@ for next_tag in "${upgrade_path[@]}"; do
         ((skipped++)) || true
         ;;
     esac
-  done < <(git diff --name-status "${prev_tag}" "${next_tag}"; echo "$?" > "/tmp/.pelican_diff_exit_${TIMESTAMP}_${next_tag//\//_}")
-  diff_exit=$(cat "/tmp/.pelican_diff_exit_${TIMESTAMP}_${next_tag//\//_}" 2>/dev/null || echo 0)
-  rm -f "/tmp/.pelican_diff_exit_${TIMESTAMP}_${next_tag//\//_}"
-
-  if [ "$diff_exit" -ne 0 ]; then
-    echo "  [ERROR]  git diff failed (exit $diff_exit) for ${prev_tag}..${next_tag}"
-    prev_tag="$next_tag"
-    continue
-  fi
+  done < "$diff_file"
+  rm -f "$diff_file"
 
   if [ "$diff_lines" -eq 0 ]; then
     echo "  No file changes detected between $prev_tag and $next_tag."
@@ -400,6 +409,7 @@ done
 
 # Cleanup temp repo
 rm -rf "$tmp_repo"
+unset GIT_DIR
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 10.  Post-update steps
