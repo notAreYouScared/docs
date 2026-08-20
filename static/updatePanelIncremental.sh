@@ -286,14 +286,19 @@ prev_tag="$current_version"
 
 for next_tag in "${upgrade_path[@]}"; do
   echo ""
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "-----------------------------------------"
   echo " Applying changes: $prev_tag -> $next_tag"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "-----------------------------------------"
 
   # Collect changed, added, deleted files between the two tags.
   # For renames (R*) git outputs: STATUS  OLD_PATH  NEW_PATH
   # We emit: STATUS OLD_PATH NEW_PATH  (space-separated, new path may be empty for non-renames)
-  mapfile -t changed_files < <(git diff --name-status "${prev_tag}..${next_tag}" 2>/dev/null | awk '{print $1, $2, ($3 != "" ? $3 : $2)}')
+  diff_output=$(git diff --name-status "${prev_tag}..${next_tag}" 2>&1) || {
+    echo "  [ERROR]  git diff failed for ${prev_tag}..${next_tag}: $diff_output"
+    prev_tag="$next_tag"
+    continue
+  }
+  mapfile -t changed_files < <(echo "$diff_output" | awk '{print $1, $2, ($3 != "" ? $3 : $2)}')
 
   if [ ${#changed_files[@]} -eq 0 ]; then
     echo "  No file changes detected between $prev_tag and $next_tag."
@@ -458,9 +463,9 @@ chown -R "$owner:$group" "$install_dir" \
 # 12.  Done
 # ─────────────────────────────────────────────────────────────────────────────
 echo ""
-echo "══════════════════════════════════════════════════"
+echo "=================================================="
 echo " Panel updated: $current_version -> $latest_version"
-echo "══════════════════════════════════════════════════"
+echo "=================================================="
 echo ""
 echo "Backup saved to: $backup_dir"
 echo ""
