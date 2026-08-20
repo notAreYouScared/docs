@@ -48,17 +48,13 @@ group="${group_input:-$group}"
 # ─────────────────────────────────────────────────────────────────────────────
 current_version=""
 
-if [ -f "$install_dir/VERSION" ]; then
-  current_version=$(cat "$install_dir/VERSION" | tr -d '[:space:]')
-fi
-
-# Fallback: read from .env APP_VERSION
-if [ -z "$current_version" ] && grep -q "^APP_VERSION=" "$env_file"; then
-  current_version=$(grep "^APP_VERSION=" "$env_file" | cut -d '=' -f2 | tr -d "\"' ")
+config_app="$install_dir/config/app.php"
+if [ -f "$config_app" ]; then
+  current_version=$(grep -oP "'version'\s*=>\s*'\K[^']+" "$config_app" | tr -d '[:space:]')
 fi
 
 if [ -z "$current_version" ]; then
-  read -rp "Could not detect current version. Enter it manually (e.g. v1.0.0): " current_version
+  read -rp "Could not detect current version from config/app.php. Enter it manually (e.g. v1.0.0): " current_version
 fi
 
 # Normalise: ensure leading 'v'
@@ -383,12 +379,7 @@ chown -R "$owner:$group" "$install_dir" \
   || echo "WARNING: chown failed – run manually: sudo $chown_cmd"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 12.  Update VERSION file
-# ─────────────────────────────────────────────────────────────────────────────
-echo "$latest_version" > "$install_dir/VERSION"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 13.  Done
+# 12.  Done
 # ─────────────────────────────────────────────────────────────────────────────
 echo ""
 echo "══════════════════════════════════════════════════"
