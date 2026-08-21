@@ -348,7 +348,8 @@ for next_tag in "${upgrade_path[@]}"; do
         fi
         dest="$install_dir/$file"
         mkdir -p "$(dirname "$dest")"
-        if git show "${next_tag}:${file}" > "$dest" 2>/dev/null; then
+        tmp_dest="$(mktemp --tmpdir="$(dirname "$dest")")"
+        if git show "${next_tag}:${file}" > "$tmp_dest" 2>/dev/null && mv -f "$tmp_dest" "$dest"; then
           if [ "$status" = "A" ]; then
             echo "  [ADD  ]  $file"
             ((added++)) || true
@@ -359,6 +360,7 @@ for next_tag in "${upgrade_path[@]}"; do
           [[ "$file" == composer.json || "$file" == composer.lock ]] && needs_composer=true
           [[ "$file" == database/migrations/* || "$file" == database/Seeders/* ]] && needs_migrations=true
         else
+          rm -f "$tmp_dest"
           echo "  [WARN ]  Could not extract $file from $next_tag"
           ((skipped++)) || true
         fi
