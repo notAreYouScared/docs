@@ -338,7 +338,7 @@ for next_tag in "${upgrade_path[@]}"; do
             ((modified++)) || true
           fi
           [[ "$file" == composer.json || "$file" == composer.lock ]] && needs_composer=true
-          [[ "$file" == database/migrations/* ]] && needs_migrations=true
+          [[ "$file" == database/migrations/* || "$file" == database/Seeders/* ]] && needs_migrations=true
         else
           echo "  [WARN ]  Could not extract $file from $next_tag"
           ((skipped++)) || true
