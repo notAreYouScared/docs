@@ -219,6 +219,10 @@ if [ "$db_connection" = "sqlite" ]; then
   if [[ "$db_database" != /* ]]; then
     db_database="$install_dir/$db_database"
   fi
+  # If the resolved path doesn't exist but the file lives in the database/ subdirectory, try that
+  if [ ! -f "$db_database" ] && [ -f "$install_dir/database/$(basename "$db_database")" ]; then
+    db_database="$install_dir/database/$(basename "$db_database")"
+  fi
   echo "SQLite database: $db_database"
 fi
 
