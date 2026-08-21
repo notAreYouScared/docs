@@ -122,7 +122,7 @@ current_version=""
 
 config_app="$install_dir/config/app.php"
 if [ -f "$config_app" ]; then
-  current_version=$(grep -oP "'version'\s*=>\s*'\K[^']+" "$config_app" | tr -d '[:space:]')
+  current_version=$(grep -oP "'version'\s*=>\s*'\K[^']+" "$config_app" | tr -d '[:space:]' || true)
 fi
 
 if [ -z "$current_version" ]; then
