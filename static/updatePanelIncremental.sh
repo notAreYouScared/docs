@@ -346,12 +346,7 @@ for next_tag in "${upgrade_path[@]}"; do
         ;;
 
       R*)
-        # Renamed -> remove old path, write new path
-        if ! is_protected "$old_path" && [ -f "$install_dir/$old_path" ]; then
-          rm -f "$install_dir/$old_path"
-          echo "  [DEL  ]  $old_path  (renamed)"
-          ((deleted++)) || true
-        fi
+        # Renamed -> write new path first, then remove old path
         if is_protected "$file"; then
           echo "  [SKIP ]  $file  (protected)"
           ((skipped++)) || true
@@ -359,12 +354,20 @@ for next_tag in "${upgrade_path[@]}"; do
         fi
         dest="$install_dir/$file"
         mkdir -p "$(dirname "$dest")"
-        if git show "${next_tag}:${file}" > "$dest" 2>/dev/null; then
+        tmp_dest="$(mktemp "$(dirname "$dest")/.tmp_XXXXXX")"
+        if git show "${next_tag}:${file}" > "$tmp_dest" 2>/dev/null; then
+          mv "$tmp_dest" "$dest"
+          if ! is_protected "$old_path" && [ -f "$install_dir/$old_path" ]; then
+            rm -f "$install_dir/$old_path"
+            echo "  [DEL  ]  $old_path  (renamed)"
+            ((deleted++)) || true
+          fi
           echo "  [ADD  ]  $file  (renamed from $old_path)"
           ((renamed++)) || true
           [[ "$file" == composer.json || "$file" == composer.lock ]] && needs_composer=true
           [[ "$file" == database/migrations/* ]] && needs_migrations=true
         else
+          rm -f "$tmp_dest"
           echo "  [WARN ]  Could not extract $file from $next_tag"
           ((skipped++)) || true
         fi
