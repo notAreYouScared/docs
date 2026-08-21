@@ -213,9 +213,12 @@ echo "DB_CONNECTION: $db_connection"
 
 db_database=""
 if [ "$db_connection" = "sqlite" ]; then
-  db_database=$(grep "^DB_DATABASE=" "$env_file" | cut -d '=' -f2 | tr -d "\"'" || echo "database.sqlite")
-  db_database="${db_database:-database.sqlite}"
-  [[ "$db_database" != *.sqlite ]] && db_database="${db_database}.sqlite"
+  db_database=$(grep "^DB_DATABASE=" "$env_file" | cut -d '=' -f2 | tr -d "\"'" || true)
+  db_database="${db_database:-database/database.sqlite}"
+  # Resolve relative paths against the install directory
+  if [[ "$db_database" != /* ]]; then
+    db_database="$install_dir/$db_database"
+  fi
   echo "SQLite database: $db_database"
 fi
 
@@ -242,8 +245,14 @@ if [ -d "$install_dir/storage/app/public" ]; then
   echo "  ✓ Backed up storage/app/public"
 fi
 
-if [ "$db_connection" = "sqlite" ] && [ -f "$install_dir/database/$db_database" ]; then
-  cp -a "$install_dir/database/$db_database" "$backup_dir/${db_database}.backup"
+if [ "$db_connection" = "sqlite" ]; then
+  if [ ! -f "$db_database" ]; then
+    echo "ERROR: SQLite database not found at '$db_database'. Aborting."
+    rm -rf "$tmp_repo"
+    exit 1
+  fi
+  db_backup_file="$backup_dir/$(basename "$db_database").backup"
+  sqlite3 "$db_database" ".backup '$db_backup_file'"
   echo "  ✓ Backed up SQLite database"
 elif [ "$db_connection" != "sqlite" ]; then
   echo ""
@@ -267,7 +276,8 @@ PROTECTED_PATHS=(
 )
 # Add the dynamic SQLite path if applicable
 if [ "$db_connection" = "sqlite" ] && [ -n "$db_database" ]; then
-  PROTECTED_PATHS+=("database/$db_database")
+  db_rel_path="${db_database#$install_dir/}"
+  PROTECTED_PATHS+=("$db_rel_path")
 fi
 
 is_protected() {
