@@ -442,10 +442,11 @@ for next_tag in "${upgrade_path[@]}"; do
     mkdir -p "${install_dir}/public/build"
 
     # Extract public/build (tarball root may be bare or wrapped in a subdirectory)
-    if tar -tzf "$release_tarball" 2>/dev/null | grep -q '^public/build/'; then
+    tarball_listing=$(tar -tzf "$release_tarball" 2>/dev/null)
+    if echo "$tarball_listing" | grep -q '^public/build/'; then
       tar -xzf "$release_tarball" -C "$install_dir" --strip-components=0 \
           --wildcards 'public/build/*' 2>/dev/null || true
-    elif tar -tzf "$release_tarball" 2>/dev/null | grep -q '/public/build/'; then
+    elif echo "$tarball_listing" | grep -q '/public/build/'; then
       # Wrapped in a top-level directory — strip one component
       tar -xzf "$release_tarball" -C "$install_dir" --strip-components=1 \
           --wildcards '*/public/build/*' 2>/dev/null || true
@@ -456,7 +457,7 @@ for next_tag in "${upgrade_path[@]}"; do
     # Update config/app.php version to match the release tag (strip leading 'v')
     tag_version="${next_tag#v}"
     if [ -f "${install_dir}/config/app.php" ]; then
-      sed -i "s/'version'\s*=>\s*'[^']*'/'version' => '${tag_version}'/" \
+      sed -i "s/'version'[[:space:]]*=>[[:space:]]*'[^']*'/'version' => '${tag_version}'/" \
           "${install_dir}/config/app.php"
       echo "  [MOD  ]  config/app.php (version -> ${tag_version})"
     fi
