@@ -348,7 +348,7 @@ for next_tag in "${upgrade_path[@]}"; do
         fi
         dest="$install_dir/$file"
         mkdir -p "$(dirname "$dest")"
-        tmp_dest="$(mktemp --tmpdir="$(dirname "$dest")")"
+        tmp_dest="$(mktemp "$(dirname "$dest")/.tmp_XXXXXX")"
         if git show "${next_tag}:${file}" > "$tmp_dest" 2>/dev/null && mv -f "$tmp_dest" "$dest"; then
           if [ "$status" = "A" ]; then
             echo "  [ADD  ]  $file"
