@@ -12,6 +12,11 @@ if ! command -v git &>/dev/null; then
   exit 1
 fi
 
+if ! command -v sqlite3 &>/dev/null; then
+  echo "sqlite3 is not installed or not in PATH. Please install sqlite3 and re-run this script." >&2
+  exit 1
+fi
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 0b.  Root check
 # ─────────────────────────────────────────────────────────────────────────────
@@ -254,7 +259,7 @@ if [ "$db_connection" = "sqlite" ]; then
   db_backup_file="$backup_dir/$(basename "$db_database").backup"
   sqlite3 "$db_database" ".backup '$db_backup_file'"
   echo "  ✓ Backed up SQLite database"
-elif [ "$db_connection" != "sqlite" ]; then
+else
   echo ""
   echo "WARNING: MySQL/MariaDB databases are NOT backed up by this script."
   read -rp "Pause now and make your own DB backup, then continue? (y/n) [y]: " db_warn
@@ -276,8 +281,12 @@ PROTECTED_PATHS=(
 )
 # Add the dynamic SQLite path if applicable
 if [ "$db_connection" = "sqlite" ] && [ -n "$db_database" ]; then
-  db_rel_path="${db_database#$install_dir/}"
-  PROTECTED_PATHS+=("$db_rel_path")
+  if [[ "$db_database" == "$install_dir/"* ]]; then
+    db_rel_path="${db_database#$install_dir/}"
+    PROTECTED_PATHS+=("$db_rel_path")
+  else
+    echo "NOTE: SQLite database is outside the install directory; it will not be overwritten by the update."
+  fi
 fi
 
 is_protected() {
