@@ -429,6 +429,46 @@ for next_tag in "${upgrade_path[@]}"; do
     echo "    Skipped:  $skipped"
   fi
 
+  # Download the official release tarball to get compiled frontend assets
+  # (public/build is gitignored and not in the tag tree) and the correct
+  # config/app.php version string (bumped after tagging on the release branch).
+  echo ""
+  echo "  Fetching release tarball for $next_tag to update public/build..."
+  release_tarball=$(mktemp --suffix=.tar.gz)
+  tarball_url="https://github.com/pelican/panel/releases/download/${next_tag}/panel.tar.gz"
+  if curl -fsSL "$tarball_url" -o "$release_tarball"; then
+    # Wipe old compiled assets to prevent stale files
+    rm -rf "${install_dir}/public/build"
+    mkdir -p "${install_dir}/public/build"
+
+    # Extract public/build (tarball root may be bare or wrapped in a subdirectory)
+    if tar -tzf "$release_tarball" 2>/dev/null | grep -q '^public/build/'; then
+      tar -xzf "$release_tarball" -C "$install_dir" --strip-components=0 \
+          --wildcards 'public/build/*' 2>/dev/null || true
+    elif tar -tzf "$release_tarball" 2>/dev/null | grep -q '/public/build/'; then
+      # Wrapped in a top-level directory — strip one component
+      tar -xzf "$release_tarball" -C "$install_dir" --strip-components=1 \
+          --wildcards '*/public/build/*' 2>/dev/null || true
+    else
+      echo "  [WARN ]  public/build not found in release tarball for $next_tag"
+    fi
+
+    # Update config/app.php version to match the release tag (strip leading 'v')
+    tag_version="${next_tag#v}"
+    if [ -f "${install_dir}/config/app.php" ]; then
+      sed -i "s/'version'\s*=>\s*'[^']*'/'version' => '${tag_version}'/" \
+          "${install_dir}/config/app.php"
+      echo "  [MOD  ]  config/app.php (version -> ${tag_version})"
+    fi
+
+    echo "  [OK   ]  public/build updated from release tarball."
+    any_changes=true
+  else
+    echo "  [WARN ]  Could not download release tarball from $tarball_url — public/build not updated."
+    echo "           You may need to rebuild assets manually: cd $install_dir && yarn install && yarn build"
+  fi
+  rm -f "$release_tarball"
+
   prev_tag="$next_tag"
 done
 
