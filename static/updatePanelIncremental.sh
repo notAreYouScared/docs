@@ -466,7 +466,21 @@ for next_tag in "${upgrade_path[@]}"; do
     any_changes=true
   else
     echo "  [WARN ]  Could not download release tarball from $tarball_url — public/build not updated."
-    echo "           You may need to rebuild assets manually: cd $install_dir && yarn install && yarn build"
+    echo "           Attempting to build assets locally (npm install && yarn build)..."
+    (
+      cd "$install_dir"
+      if npm install 2>&1; then
+        if yarn build 2>&1; then
+          echo "  [OK   ]  Assets built successfully via yarn build."
+        else
+          echo "  [ERROR]  yarn build failed. Frontend assets may be outdated."
+          echo "           Run manually: cd $install_dir && npm install && yarn build"
+        fi
+      else
+        echo "  [ERROR]  npm install failed. Frontend assets may be outdated."
+        echo "           Run manually: cd $install_dir && npm install && yarn build"
+      fi
+    ) || true
   fi
   rm -f "$release_tarball"
 
