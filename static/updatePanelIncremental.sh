@@ -309,8 +309,7 @@ for next_tag in "${upgrade_path[@]}"; do
     echo "  [ERROR]  git diff failed (exit $diff_exit) for ${prev_tag}..${next_tag}:"
     cat "$diff_err_file"
     rm -f "$diff_file" "$diff_err_file"
-    prev_tag="$next_tag"
-    continue
+    exit 1
   fi
   rm -f "$diff_err_file"
 
