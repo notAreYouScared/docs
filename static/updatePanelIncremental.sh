@@ -82,6 +82,11 @@ _error_handler() {
   local exit_code=$?
   echo ""
   echo "Script exited unexpectedly (exit code $exit_code)."
+  # Attempt to bring the panel back online if artisan down was already run
+  if [ -n "${install_dir:-}" ] && [ -f "${install_dir}/artisan" ]; then
+    echo "Attempting to bring the panel back online..."
+    (cd "$install_dir" && php artisan up) || echo "WARNING: php artisan up failed — run manually: cd $install_dir && php artisan up"
+  fi
   offer_log_upload
   exit "$exit_code"
 }
@@ -304,7 +309,14 @@ is_protected() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 9.  Apply each version hop
+# 9.  Put the panel into maintenance mode
+# ─────────────────────────────────────────────────────────────────────────────
+echo ""
+echo "Putting panel into maintenance mode..."
+(cd "$install_dir" && php artisan down) || echo "WARNING: php artisan down failed — continuing anyway."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10.  Apply each version hop
 # ─────────────────────────────────────────────────────────────────────────────
 needs_composer=false
 needs_migrations=false
@@ -433,61 +445,6 @@ for next_tag in "${upgrade_path[@]}"; do
     echo "    Skipped:  $skipped"
   fi
 
-  # Download the official release tarball to get compiled frontend assets
-  # (public/build is gitignored and not in the tag tree) and the correct
-  # config/app.php version string (bumped after tagging on the release branch).
-  echo ""
-  echo "  Fetching release tarball for $next_tag to update public/build..."
-  release_tarball=$(mktemp --suffix=.tar.gz)
-  tarball_url="https://github.com/pelican/panel/releases/download/${next_tag}/panel.tar.gz"
-  if curl -fsSL "$tarball_url" -o "$release_tarball"; then
-    # Wipe old compiled assets to prevent stale files
-    rm -rf "${install_dir}/public/build"
-    mkdir -p "${install_dir}/public/build"
-
-    # Extract public/build (tarball root may be bare or wrapped in a subdirectory)
-    tarball_listing=$(tar -tzf "$release_tarball" 2>/dev/null)
-    if echo "$tarball_listing" | grep -q '^public/build/'; then
-      tar -xzf "$release_tarball" -C "$install_dir" --strip-components=0 \
-          --wildcards 'public/build/*' 2>/dev/null || true
-    elif echo "$tarball_listing" | grep -q '/public/build/'; then
-      # Wrapped in a top-level directory — strip one component
-      tar -xzf "$release_tarball" -C "$install_dir" --strip-components=1 \
-          --wildcards '*/public/build/*' 2>/dev/null || true
-    else
-      echo "  [WARN ]  public/build not found in release tarball for $next_tag"
-    fi
-
-    # Update config/app.php version to match the release tag (strip leading 'v')
-    tag_version="${next_tag#v}"
-    if [ -f "${install_dir}/config/app.php" ]; then
-      sed -i "s/'version'[[:space:]]*=>[[:space:]]*'[^']*'/'version' => '${tag_version}'/" \
-          "${install_dir}/config/app.php"
-      echo "  [MOD  ]  config/app.php (version -> ${tag_version})"
-    fi
-
-    echo "  [OK   ]  public/build updated from release tarball."
-    any_changes=true
-  else
-    echo "  [WARN ]  Could not download release tarball from $tarball_url — public/build not updated."
-    echo "           Attempting to build assets locally (npm install && yarn build)..."
-    (
-      cd "$install_dir"
-      if npm install 2>&1; then
-        if yarn build 2>&1; then
-          echo "  [OK   ]  Assets built successfully via yarn build."
-        else
-          echo "  [ERROR]  yarn build failed. Frontend assets may be outdated."
-          echo "           Run manually: cd $install_dir && npm install && yarn build"
-        fi
-      else
-        echo "  [ERROR]  npm install failed. Frontend assets may be outdated."
-        echo "           Run manually: cd $install_dir && npm install && yarn build"
-      fi
-    ) || true
-  fi
-  rm -f "$release_tarball"
-
   prev_tag="$next_tag"
 done
 
@@ -496,11 +453,71 @@ rm -rf "$tmp_repo"
 unset GIT_DIR
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 10.  Post-update steps
+# 11.  Fetch the latest release tarball (public/build + config/app.php version)
+# ─────────────────────────────────────────────────────────────────────────────
+# This is done once for the final release only — public/build is gitignored and
+# config/app.php version is bumped on the release branch after tagging.
+echo ""
+echo "Fetching release tarball for $latest_version to update public/build..."
+release_tarball=$(mktemp --suffix=.tar.gz)
+tarball_url="https://github.com/pelican/panel/releases/download/${latest_version}/panel.tar.gz"
+if curl -fsSL "$tarball_url" -o "$release_tarball"; then
+  # Wipe old compiled assets to prevent stale files
+  rm -rf "${install_dir}/public/build"
+  mkdir -p "${install_dir}/public/build"
+
+  # Extract public/build (tarball root may be bare or wrapped in a subdirectory)
+  tarball_listing=$(tar -tzf "$release_tarball" 2>/dev/null)
+  if echo "$tarball_listing" | grep -q '^public/build/'; then
+    tar -xzf "$release_tarball" -C "$install_dir" --strip-components=0 \
+        --wildcards 'public/build/*' 2>/dev/null || true
+  elif echo "$tarball_listing" | grep -q '/public/build/'; then
+    # Wrapped in a top-level directory — strip one component
+    tar -xzf "$release_tarball" -C "$install_dir" --strip-components=1 \
+        --wildcards '*/public/build/*' 2>/dev/null || true
+  else
+    echo "  [WARN ]  public/build not found in release tarball for $latest_version"
+  fi
+
+  # Update config/app.php version to match the latest release tag (strip leading 'v')
+  tag_version="${latest_version#v}"
+  if [ -f "${install_dir}/config/app.php" ]; then
+    sed -i "s/'version'[[:space:]]*=>[[:space:]]*'[^']*'/'version' => '${tag_version}'/" \
+        "${install_dir}/config/app.php"
+    echo "  [MOD  ]  config/app.php (version -> ${tag_version})"
+  fi
+
+  echo "  [OK   ]  public/build updated from release tarball."
+else
+  echo "  [WARN ]  Could not download release tarball from $tarball_url — public/build not updated."
+  echo "           Attempting to build assets locally (npm install && yarn build)..."
+  (
+    cd "$install_dir"
+    if npm install 2>&1; then
+      if yarn build 2>&1; then
+        echo "  [OK   ]  Assets built successfully via yarn build."
+      else
+        echo "  [ERROR]  yarn build failed. Frontend assets may be outdated."
+        echo "           Run manually: cd $install_dir && npm install && yarn build"
+      fi
+    else
+      echo "  [ERROR]  npm install failed. Frontend assets may be outdated."
+      echo "           Run manually: cd $install_dir && npm install && yarn build"
+    fi
+  ) || true
+fi
+rm -f "$release_tarball"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 12.  Post-update steps
 # ─────────────────────────────────────────────────────────────────────────────
 if ! $any_changes; then
   echo ""
   echo "No file changes were applied. Panel may already be at $latest_version."
+  echo ""
+  echo "Bringing panel back online..."
+  (cd "$install_dir" && php artisan up) || echo "WARNING: php artisan up failed — run manually: cd $install_dir && php artisan up"
   trap - ERR
   offer_log_upload
   exit 0
@@ -539,7 +556,7 @@ echo "Restarting queue workers..."
 php artisan queue:restart
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 11.  Permissions
+# 13.  Permissions
 # ─────────────────────────────────────────────────────────────────────────────
 echo ""
 echo "Setting permissions..."
@@ -553,7 +570,14 @@ chown -R "$owner:$group" "$install_dir" \
   || echo "WARNING: chown failed – run manually: sudo $chown_cmd"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 12.  Done
+# 14.  Bring the panel back online
+# ─────────────────────────────────────────────────────────────────────────────
+echo ""
+echo "Bringing panel back online..."
+(cd "$install_dir" && php artisan up) || echo "WARNING: php artisan up failed — run manually: cd $install_dir && php artisan up"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 15.  Done
 # ─────────────────────────────────────────────────────────────────────────────
 echo ""
 echo "=================================================="
