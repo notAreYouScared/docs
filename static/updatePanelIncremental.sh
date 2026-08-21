@@ -12,11 +12,6 @@ if ! command -v git &>/dev/null; then
   exit 1
 fi
 
-if ! command -v sqlite3 &>/dev/null; then
-  echo "sqlite3 is not installed or not in PATH. Please install sqlite3 and re-run this script." >&2
-  exit 1
-fi
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 0b.  Root check
 # ─────────────────────────────────────────────────────────────────────────────
@@ -251,6 +246,11 @@ if [ -d "$install_dir/storage/app/public" ]; then
 fi
 
 if [ "$db_connection" = "sqlite" ]; then
+  if ! command -v sqlite3 &>/dev/null; then
+    echo "ERROR: sqlite3 is required to back up the SQLite database but is not installed. Install sqlite3 and re-run." >&2
+    rm -rf "$tmp_repo"
+    exit 1
+  fi
   if [ ! -f "$db_database" ]; then
     echo "ERROR: SQLite database not found at '$db_database'. Aborting."
     rm -rf "$tmp_repo"
