@@ -1,8 +1,20 @@
 #!/bin/bash
 # Pelican Panel – Incremental Git-Based Update Script
 # Applies only the files that changed between your current version and the latest release.
+# Usage: sudo bash updatePanelIncremental.sh [--long]
+#   --long   Show individual file changes (added/modified/deleted/skipped) in the output
 
 set -euo pipefail
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Parse arguments
+# ─────────────────────────────────────────────────────────────────────────────
+VERBOSE=false
+for arg in "$@"; do
+  case "$arg" in
+    --long|-v) VERBOSE=true ;;
+  esac
+done
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 0a.  Dependency check – git must be available
@@ -338,7 +350,7 @@ for next_tag in "${upgrade_path[@]}"; do
   diff_exit=0
   git diff --name-status "${prev_tag}" "${next_tag}" > "$diff_file" 2>"$diff_err_file" || diff_exit=$?
 
-  added=0; modified=0; deleted=0; renamed=0; skipped=0; diff_lines=0
+      added=0; modified=0; deleted=0; renamed=0; skipped=0; diff_lines=0
 
   if [ "$diff_exit" -ne 0 ]; then
     echo "  [ERROR]  git diff failed (exit $diff_exit) for ${prev_tag}..${next_tag}:"
@@ -358,7 +370,7 @@ for next_tag in "${upgrade_path[@]}"; do
       A|M|C*)
         # Added, Modified, Copied -> extract from next_tag and write
         if is_protected "$file"; then
-          echo "  [SKIP ]  $file  (protected)"
+          $VERBOSE && echo "  [SKIP ]  $file  (protected)"
           ((skipped++)) || true
           continue
         fi
@@ -367,10 +379,10 @@ for next_tag in "${upgrade_path[@]}"; do
         tmp_dest="$(mktemp "$(dirname "$dest")/.tmp_XXXXXX")"
         if git show "${next_tag}:${file}" > "$tmp_dest" 2>/dev/null && mv -f "$tmp_dest" "$dest"; then
           if [ "$status" = "A" ]; then
-            echo "  [ADD  ]  $file"
+            $VERBOSE && echo "  [ADD  ]  $file"
             ((added++)) || true
           else
-            echo "  [MOD  ]  $file"
+            $VERBOSE && echo "  [MOD  ]  $file"
             ((modified++)) || true
           fi
           [[ "$file" == composer.json || "$file" == composer.lock ]] && needs_composer=true
@@ -385,7 +397,7 @@ for next_tag in "${upgrade_path[@]}"; do
       R*)
         # Renamed -> write new path first, then remove old path
         if is_protected "$file"; then
-          echo "  [SKIP ]  $file  (protected)"
+          $VERBOSE && echo "  [SKIP ]  $file  (protected)"
           ((skipped++)) || true
           continue
         fi
@@ -396,10 +408,10 @@ for next_tag in "${upgrade_path[@]}"; do
           mv "$tmp_dest" "$dest"
           if ! is_protected "$old_path" && [ -f "$install_dir/$old_path" ]; then
             rm -f "$install_dir/$old_path"
-            echo "  [DEL  ]  $old_path  (renamed)"
+            $VERBOSE && echo "  [DEL  ]  $old_path  (renamed)"
             ((deleted++)) || true
           fi
-          echo "  [ADD  ]  $file  (renamed from $old_path)"
+          $VERBOSE && echo "  [ADD  ]  $file  (renamed from $old_path)"
           ((renamed++)) || true
           [[ "$file" == composer.json || "$file" == composer.lock ]] && needs_composer=true
           [[ "$file" == database/migrations/* ]] && needs_migrations=true
@@ -413,19 +425,19 @@ for next_tag in "${upgrade_path[@]}"; do
       D)
         # Deleted
         if is_protected "$file"; then
-          echo "  [SKIP ]  $file  (protected)"
+          $VERBOSE && echo "  [SKIP ]  $file  (protected)"
           ((skipped++)) || true
           continue
         fi
         if [ -f "$install_dir/$file" ]; then
           rm -f "$install_dir/$file"
-          echo "  [DEL  ]  $file"
+          $VERBOSE && echo "  [DEL  ]  $file"
           ((deleted++)) || true
         fi
         ;;
 
       *)
-        echo "  [SKIP ]  $file  (unhandled status: $status)"
+        $VERBOSE && echo "  [SKIP ]  $file  (unhandled status: $status)"
         ((skipped++)) || true
         ;;
     esac
@@ -484,10 +496,10 @@ if curl -fsSL "$tarball_url" -o "$release_tarball"; then
   if [ -f "${install_dir}/config/app.php" ]; then
     sed -i "s/'version'[[:space:]]*=>[[:space:]]*'[^']*'/'version' => '${tag_version}'/" \
         "${install_dir}/config/app.php"
-    echo "  [MOD  ]  config/app.php (version -> ${tag_version})"
+    $VERBOSE && echo "  [MOD  ]  config/app.php (version -> ${tag_version})"
   fi
 
-  echo "  [OK   ]  public/build updated from release tarball."
+  $VERBOSE && echo "  [OK   ]  public/build updated from release tarball."
 else
   echo "  [WARN ]  Could not download release tarball from $tarball_url — public/build not updated."
   echo "           Attempting to build assets locally (npm install && yarn build)..."
